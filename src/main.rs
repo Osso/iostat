@@ -32,17 +32,54 @@ struct Args {
     #[arg(short = 'y', long)]
     omit_first: bool,
 
-    /// Filter by device name (comma-separated or multiple -f flags)
-    #[arg(short = 'f', long = "filter", value_delimiter = ',')]
+    /// Device names, interval, and count (e.g., "nvme0n1 sda 1 5")
+    positional: Vec<String>,
+}
+
+struct ParsedArgs {
     devices: Vec<String>,
-
-    /// Interval in seconds
-    #[arg(default_value = "1")]
     interval: f64,
-
-    /// Number of reports (0 = infinite)
-    #[arg(default_value = "0")]
     count: u32,
+}
+
+fn parse_positional(args: &[String]) -> ParsedArgs {
+    let mut devices = Vec::new();
+    let mut interval = 1.0;
+    let mut count = 0u32;
+
+    let mut remaining = args.to_vec();
+
+    // Count trailing numbers
+    let trailing_numbers: Vec<f64> = remaining
+        .iter()
+        .rev()
+        .take_while(|s| s.parse::<f64>().is_ok())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    // Remove trailing numbers from remaining
+    for _ in 0..trailing_numbers.len() {
+        remaining.pop();
+    }
+
+    // Parse based on how many trailing numbers we have
+    match trailing_numbers.len() {
+        1 => interval = trailing_numbers[0],
+        2 => {
+            count = trailing_numbers[0] as u32;  // last arg is count
+            interval = trailing_numbers[1];      // second-to-last is interval
+        }
+        _ => {}
+    }
+
+    // Everything else is a device name
+    for arg in remaining {
+        // Strip /dev/ prefix if present
+        let dev = arg.strip_prefix("/dev/").unwrap_or(&arg);
+        devices.push(dev.to_string());
+    }
+
+    ParsedArgs { devices, interval, count }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -291,6 +328,7 @@ fn matches_filter(name: &str, filters: &[String]) -> bool {
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
+    let parsed = parse_positional(&args.positional);
 
     // Determine what to show
     let show_cpu = args.cpu || (!args.cpu && !args.device);
@@ -298,8 +336,8 @@ fn main() -> io::Result<()> {
 
     let unit_divisor = if args.megabytes { 1024.0 } else { 1.0 };
 
-    let interval = Duration::from_secs_f64(args.interval);
-    let mut count = if args.count == 0 { u32::MAX } else { args.count };
+    let interval = Duration::from_secs_f64(parsed.interval);
+    let mut count = if parsed.count == 0 { u32::MAX } else { parsed.count };
 
     let mut prev_cpu = read_cpu_stats()?;
     let mut prev_disk = read_disk_stats()?;
@@ -316,7 +354,7 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = prev_disk.keys().filter(|n| matches_filter(n, &args.devices)).collect();
+            let mut devices: Vec<_> = prev_disk.keys().filter(|n| matches_filter(n, &parsed.devices)).collect();
             devices.sort();
             for name in devices {
                 print_device_stats(name, &DiskStats::default(), 1.0, args.extended, unit_divisor);
@@ -349,12 +387,12 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = curr_disk.keys().filter(|n| matches_filter(n, &args.devices)).collect();
+            let mut devices: Vec<_> = curr_disk.keys().filter(|n| matches_filter(n, &parsed.devices)).collect();
             devices.sort();
             for name in devices {
                 if let (Some(curr), Some(prev)) = (curr_disk.get(name), prev_disk.get(name)) {
                     let delta = curr.delta(prev);
-                    print_device_stats(name, &delta, args.interval, args.extended, unit_divisor);
+                    print_device_stats(name, &delta, parsed.interval, args.extended, unit_divisor);
                 }
             }
             println!();
