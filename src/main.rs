@@ -32,6 +32,10 @@ struct Args {
     #[arg(short = 'y', long)]
     omit_first: bool,
 
+    /// Filter by device name (comma-separated or multiple -f flags)
+    #[arg(short = 'f', long = "filter", value_delimiter = ',')]
+    devices: Vec<String>,
+
     /// Interval in seconds
     #[arg(default_value = "1")]
     interval: f64,
@@ -278,6 +282,13 @@ fn print_device_stats(
     }
 }
 
+fn matches_filter(name: &str, filters: &[String]) -> bool {
+    if filters.is_empty() {
+        return true;
+    }
+    filters.iter().any(|f| name.contains(f.as_str()))
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -305,7 +316,7 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = prev_disk.keys().collect();
+            let mut devices: Vec<_> = prev_disk.keys().filter(|n| matches_filter(n, &args.devices)).collect();
             devices.sort();
             for name in devices {
                 print_device_stats(name, &DiskStats::default(), 1.0, args.extended, unit_divisor);
@@ -338,7 +349,7 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = curr_disk.keys().collect();
+            let mut devices: Vec<_> = curr_disk.keys().filter(|n| matches_filter(n, &args.devices)).collect();
             devices.sort();
             for name in devices {
                 if let (Some(curr), Some(prev)) = (curr_disk.get(name), prev_disk.get(name)) {
