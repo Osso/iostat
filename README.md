@@ -1,6 +1,9 @@
 # iostat
 
 [![CI](https://github.com/Osso/iostat/actions/workflows/ci.yml/badge.svg)](https://github.com/Osso/iostat/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/Osso/iostat)](https://github.com/Osso/iostat/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/Osso/iostat/total)](https://github.com/Osso/iostat/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A lightweight `iostat` replacement written in Rust. Reports CPU and I/O statistics by reading `/proc/stat` and `/proc/diskstats`.
 
