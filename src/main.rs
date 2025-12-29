@@ -66,8 +66,8 @@ fn parse_positional(args: &[String]) -> ParsedArgs {
     match trailing_numbers.len() {
         1 => interval = trailing_numbers[0],
         2 => {
-            count = trailing_numbers[0] as u32;  // last arg is count
-            interval = trailing_numbers[1];      // second-to-last is interval
+            count = trailing_numbers[0] as u32; // last arg is count
+            interval = trailing_numbers[1]; // second-to-last is interval
         }
         _ => {}
     }
@@ -79,7 +79,11 @@ fn parse_positional(args: &[String]) -> ParsedArgs {
         devices.push(dev.to_string());
     }
 
-    ParsedArgs { devices, interval, count }
+    ParsedArgs {
+        devices,
+        interval,
+        count,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -96,7 +100,14 @@ struct CpuStats {
 
 impl CpuStats {
     fn total(&self) -> u64 {
-        self.user + self.nice + self.system + self.idle + self.iowait + self.irq + self.softirq + self.steal
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
     }
 
     fn delta(&self, prev: &CpuStats) -> CpuStats {
@@ -156,7 +167,9 @@ impl DiskStats {
             write_time_ms: self.write_time_ms.saturating_sub(prev.write_time_ms),
             io_in_progress: self.io_in_progress,
             io_time_ms: self.io_time_ms.saturating_sub(prev.io_time_ms),
-            weighted_io_time_ms: self.weighted_io_time_ms.saturating_sub(prev.weighted_io_time_ms),
+            weighted_io_time_ms: self
+                .weighted_io_time_ms
+                .saturating_sub(prev.weighted_io_time_ms),
         }
     }
 }
@@ -224,10 +237,10 @@ fn is_partition(name: &str) -> bool {
     // NVMe partitions: nvme0n1p1, nvme0n1p2
     if name.contains("nvme") && name.contains('p') {
         let parts: Vec<&str> = name.split('p').collect();
-        if parts.len() > 1 {
-            if let Some(last) = parts.last() {
-                return last.chars().all(|c| c.is_ascii_digit()) && !last.is_empty();
-            }
+        if parts.len() > 1
+            && let Some(last) = parts.last()
+        {
+            return last.chars().all(|c| c.is_ascii_digit()) && !last.is_empty();
         }
     }
     // SCSI/SATA partitions: sda1, sdb2
@@ -283,8 +296,10 @@ fn print_device_stats(
     let tps = reads_per_sec + writes_per_sec;
 
     // Sectors are 512 bytes
-    let kb_read_per_sec = (delta.sectors_read as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
-    let kb_written_per_sec = (delta.sectors_written as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
+    let kb_read_per_sec =
+        (delta.sectors_read as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
+    let kb_written_per_sec =
+        (delta.sectors_written as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
 
     if extended {
         let rrqm_per_sec = delta.reads_merged as f64 / interval_secs;
@@ -308,8 +323,16 @@ fn print_device_stats(
 
         println!(
             "{:<12} {:>8.2} {:>8.2} {:>10.2} {:>10.2} {:>8.2} {:>8.2} {:>7.2} {:>7.2} {:>6.2}",
-            name, reads_per_sec, writes_per_sec, kb_read_per_sec, kb_written_per_sec,
-            rrqm_per_sec, wrqm_per_sec, await_ms, svctm, util
+            name,
+            reads_per_sec,
+            writes_per_sec,
+            kb_read_per_sec,
+            kb_written_per_sec,
+            rrqm_per_sec,
+            wrqm_per_sec,
+            await_ms,
+            svctm,
+            util
         );
     } else {
         println!(
@@ -330,14 +353,18 @@ fn main() -> io::Result<()> {
     let args = Args::parse();
     let parsed = parse_positional(&args.positional);
 
-    // Determine what to show
-    let show_cpu = args.cpu || (!args.cpu && !args.device);
-    let show_device = args.device || (!args.cpu && !args.device);
+    // Determine what to show (default: show both if neither specified)
+    let show_cpu = args.cpu || !args.device;
+    let show_device = args.device || !args.cpu;
 
     let unit_divisor = if args.megabytes { 1024.0 } else { 1.0 };
 
     let interval = Duration::from_secs_f64(parsed.interval);
-    let mut count = if parsed.count == 0 { u32::MAX } else { parsed.count };
+    let mut count = if parsed.count == 0 {
+        u32::MAX
+    } else {
+        parsed.count
+    };
 
     let mut prev_cpu = read_cpu_stats()?;
     let mut prev_disk = read_disk_stats()?;
@@ -354,10 +381,19 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = prev_disk.keys().filter(|n| matches_filter(n, &parsed.devices)).collect();
+            let mut devices: Vec<_> = prev_disk
+                .keys()
+                .filter(|n| matches_filter(n, &parsed.devices))
+                .collect();
             devices.sort();
             for name in devices {
-                print_device_stats(name, &DiskStats::default(), 1.0, args.extended, unit_divisor);
+                print_device_stats(
+                    name,
+                    &DiskStats::default(),
+                    1.0,
+                    args.extended,
+                    unit_divisor,
+                );
             }
             println!();
         }
@@ -387,7 +423,10 @@ fn main() -> io::Result<()> {
         if show_device {
             println!("Device:");
             print_device_header(args.extended);
-            let mut devices: Vec<_> = curr_disk.keys().filter(|n| matches_filter(n, &parsed.devices)).collect();
+            let mut devices: Vec<_> = curr_disk
+                .keys()
+                .filter(|n| matches_filter(n, &parsed.devices))
+                .collect();
             devices.sort();
             for name in devices {
                 if let (Some(curr), Some(prev)) = (curr_disk.get(name), prev_disk.get(name)) {
