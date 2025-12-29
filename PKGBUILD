@@ -6,8 +6,8 @@ pkgdesc="I/O statistics reporter written in Rust"
 arch=('x86_64')
 url="https://github.com/osso/iostat"
 license=('MIT')
-depends=('gcc-libs')
-makedepends=('cargo')
+depends=()
+makedepends=('cargo' 'musl')
 provides=('iostat')
 conflicts=('sysstat')
 source=()
@@ -19,5 +19,5 @@ build() {
 
 package() {
     cd "$startdir"
-    install -Dm755 "target/release/iostat" "$pkgdir/usr/bin/iostat"
+    install -Dm755 "target/x86_64-unknown-linux-musl/release/iostat" "$pkgdir/usr/bin/iostat"
 }
