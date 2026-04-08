@@ -349,54 +349,149 @@ fn matches_filter(name: &str, filters: &[String]) -> bool {
     filters.iter().any(|f| name.contains(f.as_str()))
 }
 
+fn print_first_report(
+    prev_cpu: &CpuStats,
+    prev_disk: &HashMap<String, DiskStats>,
+    show_cpu: bool,
+    show_device: bool,
+    extended: bool,
+    unit_divisor: f64,
+    device_filter: &[String],
+) {
+    if show_cpu {
+        println!("avg-cpu:");
+        print_cpu_header();
+        print_cpu_stats(prev_cpu);
+        println!();
+    }
+
+    if show_device {
+        println!("Device:");
+        print_device_header(extended);
+        let mut devices: Vec<_> = prev_disk
+            .keys()
+            .filter(|n| matches_filter(n, device_filter))
+            .collect();
+        devices.sort();
+        for name in devices {
+            print_device_stats(name, &DiskStats::default(), 1.0, extended, unit_divisor);
+        }
+        println!();
+    }
+}
+
+fn print_interval_report(
+    curr_cpu: &CpuStats,
+    prev_cpu: &CpuStats,
+    curr_disk: &HashMap<String, DiskStats>,
+    prev_disk: &HashMap<String, DiskStats>,
+    show_cpu: bool,
+    show_device: bool,
+    extended: bool,
+    unit_divisor: f64,
+    interval_secs: f64,
+    device_filter: &[String],
+) -> io::Result<()> {
+    io::stdout().flush()?;
+
+    if show_cpu {
+        println!("avg-cpu:");
+        print_cpu_header();
+        let delta = curr_cpu.delta(prev_cpu);
+        print_cpu_stats(&delta);
+        println!();
+    }
+
+    if show_device {
+        println!("Device:");
+        print_device_header(extended);
+        let mut devices: Vec<_> = curr_disk
+            .keys()
+            .filter(|n| matches_filter(n, device_filter))
+            .collect();
+        devices.sort();
+        for name in devices {
+            if let (Some(curr), Some(prev)) = (curr_disk.get(name), prev_disk.get(name)) {
+                let delta = curr.delta(prev);
+                print_device_stats(name, &delta, interval_secs, extended, unit_divisor);
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn run_poll_loop(
+    interval: Duration,
+    count: u32,
+    show_cpu: bool,
+    show_device: bool,
+    extended: bool,
+    unit_divisor: f64,
+    interval_secs: f64,
+    device_filter: &[String],
+    initial_cpu: CpuStats,
+    initial_disk: HashMap<String, DiskStats>,
+) -> io::Result<()> {
+    let mut prev_cpu = initial_cpu;
+    let mut prev_disk = initial_disk;
+    let mut remaining = count;
+
+    loop {
+        thread::sleep(interval);
+
+        let curr_cpu = read_cpu_stats()?;
+        let curr_disk = read_disk_stats()?;
+
+        print_interval_report(
+            &curr_cpu,
+            &prev_cpu,
+            &curr_disk,
+            &prev_disk,
+            show_cpu,
+            show_device,
+            extended,
+            unit_divisor,
+            interval_secs,
+            device_filter,
+        )?;
+
+        prev_cpu = curr_cpu;
+        prev_disk = curr_disk;
+
+        remaining = remaining.saturating_sub(1);
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let parsed = parse_positional(&args.positional);
 
-    // Determine what to show (default: show both if neither specified)
     let show_cpu = args.cpu || !args.device;
     let show_device = args.device || !args.cpu;
-
     let unit_divisor = if args.megabytes { 1024.0 } else { 1.0 };
-
     let interval = Duration::from_secs_f64(parsed.interval);
-    let mut count = if parsed.count == 0 {
-        u32::MAX
-    } else {
-        parsed.count
-    };
+    let mut count = if parsed.count == 0 { u32::MAX } else { parsed.count };
 
-    let mut prev_cpu = read_cpu_stats()?;
-    let mut prev_disk = read_disk_stats()?;
+    let prev_cpu = read_cpu_stats()?;
+    let prev_disk = read_disk_stats()?;
 
-    // First report (since boot) unless -y
     if !args.omit_first {
-        if show_cpu {
-            println!("avg-cpu:");
-            print_cpu_header();
-            print_cpu_stats(&prev_cpu);
-            println!();
-        }
-
-        if show_device {
-            println!("Device:");
-            print_device_header(args.extended);
-            let mut devices: Vec<_> = prev_disk
-                .keys()
-                .filter(|n| matches_filter(n, &parsed.devices))
-                .collect();
-            devices.sort();
-            for name in devices {
-                print_device_stats(
-                    name,
-                    &DiskStats::default(),
-                    1.0,
-                    args.extended,
-                    unit_divisor,
-                );
-            }
-            println!();
-        }
+        print_first_report(
+            &prev_cpu,
+            &prev_disk,
+            show_cpu,
+            show_device,
+            args.extended,
+            unit_divisor,
+            &parsed.devices,
+        );
 
         count = count.saturating_sub(1);
         if count == 0 {
@@ -404,47 +499,16 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // Subsequent reports
-    loop {
-        thread::sleep(interval);
-        io::stdout().flush()?;
-
-        let curr_cpu = read_cpu_stats()?;
-        let curr_disk = read_disk_stats()?;
-
-        if show_cpu {
-            println!("avg-cpu:");
-            print_cpu_header();
-            let delta = curr_cpu.delta(&prev_cpu);
-            print_cpu_stats(&delta);
-            println!();
-        }
-
-        if show_device {
-            println!("Device:");
-            print_device_header(args.extended);
-            let mut devices: Vec<_> = curr_disk
-                .keys()
-                .filter(|n| matches_filter(n, &parsed.devices))
-                .collect();
-            devices.sort();
-            for name in devices {
-                if let (Some(curr), Some(prev)) = (curr_disk.get(name), prev_disk.get(name)) {
-                    let delta = curr.delta(prev);
-                    print_device_stats(name, &delta, parsed.interval, args.extended, unit_divisor);
-                }
-            }
-            println!();
-        }
-
-        prev_cpu = curr_cpu;
-        prev_disk = curr_disk;
-
-        count = count.saturating_sub(1);
-        if count == 0 {
-            break;
-        }
-    }
-
-    Ok(())
+    run_poll_loop(
+        interval,
+        count,
+        show_cpu,
+        show_device,
+        args.extended,
+        unit_divisor,
+        parsed.interval,
+        &parsed.devices,
+        prev_cpu,
+        prev_disk,
+    )
 }
