@@ -477,7 +477,11 @@ fn main() -> io::Result<()> {
     let show_device = args.device || !args.cpu;
     let unit_divisor = if args.megabytes { 1024.0 } else { 1.0 };
     let interval = Duration::from_secs_f64(parsed.interval);
-    let mut count = if parsed.count == 0 { u32::MAX } else { parsed.count };
+    let mut count = if parsed.count == 0 {
+        u32::MAX
+    } else {
+        parsed.count
+    };
 
     let prev_cpu = read_cpu_stats()?;
     let prev_disk = read_disk_stats()?;
