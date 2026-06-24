@@ -1,9 +1,14 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 use clap::Parser;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
+
+#[cfg(test)]
+mod main_tests;
 
 #[derive(Parser)]
 #[command(name = "iostat", about = "Report I/O statistics")]
@@ -174,6 +179,7 @@ impl DiskStats {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn read_cpu_stats() -> io::Result<CpuStats> {
     let content = fs::read_to_string("/proc/stat")?;
     for line in content.lines() {
@@ -196,6 +202,7 @@ fn read_cpu_stats() -> io::Result<CpuStats> {
     Ok(CpuStats::default())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn read_disk_stats() -> io::Result<HashMap<String, DiskStats>> {
     let content = fs::read_to_string("/proc/diskstats")?;
     let mut stats = HashMap::new();
@@ -255,6 +262,7 @@ fn is_partition(name: &str) -> bool {
     false
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_cpu_header() {
     println!(
         "{:>6} {:>6} {:>6} {:>6} {:>6} {:>6}",
@@ -262,6 +270,7 @@ fn print_cpu_header() {
     );
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_cpu_stats(delta: &CpuStats) {
     let (user, sys, iowait, steal, idle, irq) = delta.percentages();
     println!(
@@ -270,6 +279,7 @@ fn print_cpu_stats(delta: &CpuStats) {
     );
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_device_header(extended: bool) {
     if extended {
         println!(
@@ -284,6 +294,7 @@ fn print_device_header(extended: bool) {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_device_stats(
     name: &str,
     delta: &DiskStats,
@@ -291,55 +302,84 @@ fn print_device_stats(
     extended: bool,
     unit_divisor: f64,
 ) {
-    let reads_per_sec = delta.reads_completed as f64 / interval_secs;
-    let writes_per_sec = delta.writes_completed as f64 / interval_secs;
-    let tps = reads_per_sec + writes_per_sec;
-
-    // Sectors are 512 bytes
-    let kb_read_per_sec =
-        (delta.sectors_read as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
-    let kb_written_per_sec =
-        (delta.sectors_written as f64 * 512.0) / 1024.0 / interval_secs / unit_divisor;
-
-    if extended {
-        let rrqm_per_sec = delta.reads_merged as f64 / interval_secs;
-        let wrqm_per_sec = delta.writes_merged as f64 / interval_secs;
-
-        let total_ios = delta.reads_completed + delta.writes_completed;
-        let await_ms = if total_ios > 0 {
-            (delta.read_time_ms + delta.write_time_ms) as f64 / total_ios as f64
-        } else {
-            0.0
-        };
-
-        let svctm = if total_ios > 0 {
-            delta.io_time_ms as f64 / total_ios as f64
-        } else {
-            0.0
-        };
-
-        let util = (delta.io_time_ms as f64 / (interval_secs * 1000.0)) * 100.0;
-        let util = util.min(100.0);
-
-        println!(
-            "{:<12} {:>8.2} {:>8.2} {:>10.2} {:>10.2} {:>8.2} {:>8.2} {:>7.2} {:>7.2} {:>6.2}",
-            name,
-            reads_per_sec,
-            writes_per_sec,
-            kb_read_per_sec,
-            kb_written_per_sec,
-            rrqm_per_sec,
-            wrqm_per_sec,
-            await_ms,
-            svctm,
-            util
-        );
-    } else {
+    let rates = compute_device_rates(delta, interval_secs, unit_divisor);
+    if !extended {
         println!(
             "{:<12} {:>8.2} {:>10.2} {:>10.2}",
-            name, tps, kb_read_per_sec, kb_written_per_sec
+            name, rates.tps, rates.kb_read_per_sec, rates.kb_written_per_sec
         );
+        return;
     }
+
+    let ext = compute_extended_device_stats(delta, interval_secs);
+    println!(
+        "{:<12} {:>8.2} {:>8.2} {:>10.2} {:>10.2} {:>8.2} {:>8.2} {:>7.2} {:>7.2} {:>6.2}",
+        name,
+        rates.reads_per_sec,
+        rates.writes_per_sec,
+        rates.kb_read_per_sec,
+        rates.kb_written_per_sec,
+        ext.rrqm_per_sec,
+        ext.wrqm_per_sec,
+        ext.await_ms,
+        ext.svctm,
+        ext.util
+    );
+}
+
+struct DeviceRates {
+    reads_per_sec: f64,
+    writes_per_sec: f64,
+    tps: f64,
+    kb_read_per_sec: f64,
+    kb_written_per_sec: f64,
+}
+
+fn compute_device_rates(delta: &DiskStats, interval_secs: f64, unit_divisor: f64) -> DeviceRates {
+    let reads_per_sec = delta.reads_completed as f64 / interval_secs;
+    let writes_per_sec = delta.writes_completed as f64 / interval_secs;
+    DeviceRates {
+        reads_per_sec,
+        writes_per_sec,
+        tps: reads_per_sec + writes_per_sec,
+        kb_read_per_sec: (delta.sectors_read as f64 * 512.0)
+            / 1024.0
+            / interval_secs
+            / unit_divisor,
+        kb_written_per_sec: (delta.sectors_written as f64 * 512.0)
+            / 1024.0
+            / interval_secs
+            / unit_divisor,
+    }
+}
+
+struct ExtendedDeviceStats {
+    rrqm_per_sec: f64,
+    wrqm_per_sec: f64,
+    await_ms: f64,
+    svctm: f64,
+    util: f64,
+}
+
+fn compute_extended_device_stats(delta: &DiskStats, interval_secs: f64) -> ExtendedDeviceStats {
+    let total_ios = delta.reads_completed + delta.writes_completed;
+    let await_ms = average_or_zero(delta.read_time_ms + delta.write_time_ms, total_ios);
+    let svctm = average_or_zero(delta.io_time_ms, total_ios);
+    let util = ((delta.io_time_ms as f64 / (interval_secs * 1000.0)) * 100.0).min(100.0);
+    ExtendedDeviceStats {
+        rrqm_per_sec: delta.reads_merged as f64 / interval_secs,
+        wrqm_per_sec: delta.writes_merged as f64 / interval_secs,
+        await_ms,
+        svctm,
+        util,
+    }
+}
+
+fn average_or_zero(total: u64, count: u64) -> f64 {
+    if count == 0 {
+        return 0.0;
+    }
+    total as f64 / count as f64
 }
 
 fn matches_filter(name: &str, filters: &[String]) -> bool {
@@ -349,6 +389,7 @@ fn matches_filter(name: &str, filters: &[String]) -> bool {
     filters.iter().any(|f| name.contains(f.as_str()))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_first_report(
     prev_cpu: &CpuStats,
     prev_disk: &HashMap<String, DiskStats>,
@@ -380,6 +421,7 @@ fn print_first_report(
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn print_interval_report(
     curr_cpu: &CpuStats,
     prev_cpu: &CpuStats,
@@ -422,6 +464,7 @@ fn print_interval_report(
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn run_poll_loop(
     interval: Duration,
     count: u32,
@@ -469,50 +512,83 @@ fn run_poll_loop(
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let args = Args::parse();
-    let parsed = parse_positional(&args.positional);
+struct RunConfig {
+    show_cpu: bool,
+    show_device: bool,
+    unit_divisor: f64,
+    interval: Duration,
+    interval_secs: f64,
+    count: u32,
+    extended: bool,
+    omit_first: bool,
+    devices: Vec<String>,
+}
 
-    let show_cpu = args.cpu || !args.device;
-    let show_device = args.device || !args.cpu;
-    let unit_divisor = if args.megabytes { 1024.0 } else { 1.0 };
-    let interval = Duration::from_secs_f64(parsed.interval);
-    let mut count = if parsed.count == 0 {
-        u32::MAX
-    } else {
-        parsed.count
-    };
+fn build_run_config(args: Args, parsed: ParsedArgs) -> RunConfig {
+    RunConfig {
+        show_cpu: args.cpu || !args.device,
+        show_device: args.device || !args.cpu,
+        unit_divisor: if args.megabytes { 1024.0 } else { 1.0 },
+        interval: Duration::from_secs_f64(parsed.interval),
+        interval_secs: parsed.interval,
+        count: if parsed.count == 0 {
+            u32::MAX
+        } else {
+            parsed.count
+        },
+        extended: args.extended,
+        omit_first: args.omit_first,
+        devices: parsed.devices,
+    }
+}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn print_initial_report_and_adjust_count(
+    cfg: &RunConfig,
+    prev_cpu: &CpuStats,
+    prev_disk: &HashMap<String, DiskStats>,
+) -> u32 {
+    if cfg.omit_first {
+        return cfg.count;
+    }
+    print_first_report(
+        prev_cpu,
+        prev_disk,
+        cfg.show_cpu,
+        cfg.show_device,
+        cfg.extended,
+        cfg.unit_divisor,
+        &cfg.devices,
+    );
+    cfg.count.saturating_sub(1)
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn run_with_config(cfg: RunConfig) -> io::Result<()> {
     let prev_cpu = read_cpu_stats()?;
     let prev_disk = read_disk_stats()?;
-
-    if !args.omit_first {
-        print_first_report(
-            &prev_cpu,
-            &prev_disk,
-            show_cpu,
-            show_device,
-            args.extended,
-            unit_divisor,
-            &parsed.devices,
-        );
-
-        count = count.saturating_sub(1);
-        if count == 0 {
-            return Ok(());
-        }
+    let count = print_initial_report_and_adjust_count(&cfg, &prev_cpu, &prev_disk);
+    if count == 0 {
+        return Ok(());
     }
-
     run_poll_loop(
-        interval,
+        cfg.interval,
         count,
-        show_cpu,
-        show_device,
-        args.extended,
-        unit_divisor,
-        parsed.interval,
-        &parsed.devices,
+        cfg.show_cpu,
+        cfg.show_device,
+        cfg.extended,
+        cfg.unit_divisor,
+        cfg.interval_secs,
+        &cfg.devices,
         prev_cpu,
         prev_disk,
     )
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn main() -> io::Result<()> {
+    let args = Args::parse();
+    let parsed = parse_positional(&args.positional);
+    let cfg = build_run_config(args, parsed);
+    run_with_config(cfg)
 }
